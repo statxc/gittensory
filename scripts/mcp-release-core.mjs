@@ -222,6 +222,7 @@ ${changedFiles}
 - [ ] Run \`npm run changelog:check:mcp\`
 - [ ] Run \`npm run actionlint\`
 - [ ] Run \`npm run test:release:mcp\`
+- [ ] Run \`npm run mcp:release-candidate -- --tag mcp-v${report.proposedVersion} --full-ci\`
 - [ ] Merge the release-prep PR
 - [ ] Tag \`mcp-v${report.proposedVersion}\`
 - [ ] Watch npm trusted publishing and the GitHub Release job

@@ -1,0 +1,49 @@
+name: MCP Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Intended MCP release tag, for example mcp-v0.5.0. Defaults to packages/gittensory-mcp/package.json."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run MCP release-candidate dry run
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            TAG="$(node -e 'const pkg=require("./packages/gittensory-mcp/package.json"); process.stdout.write(`mcp-v${pkg.version}`)')"
+          fi
+          npm run mcp:release-candidate -- --tag "$TAG" --full-ci

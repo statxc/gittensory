@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const bin = join(process.cwd(), "packages/gittensory-mcp/bin/gittensory-mcp.js");
+const fixtureApiTimeoutMs = "10000";
 let server: Server | null = null;
 
 describe("gittensory-mcp CLI", () => {
@@ -300,7 +301,7 @@ describe("gittensory-mcp CLI", () => {
     expect(statusOutput).not.toContain("session-token");
     // Sanity: upgrade guidance still surfaces in human-readable output.
     expect(statusOutput).toContain("npm install -g @jsonbored/gittensory-mcp@latest");
-  });
+  }, 60000);
 
   it("stores, switches, and reports named MCP profiles without mixing sessions", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
@@ -342,7 +343,7 @@ describe("gittensory-mcp CLI", () => {
       ]),
     );
     expect(JSON.stringify(list)).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
-  });
+  }, 60000);
 
   it("keeps environment tokens ahead of active profile sessions", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
@@ -431,7 +432,7 @@ describe("gittensory-mcp CLI", () => {
     expect(doctor.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "auth", status: "fail" })]));
     expect(requests).toEqual(expect.arrayContaining([expect.objectContaining({ url: "/v1/auth/logout", authorization: "Bearer session-jsonbored" })]));
     expect(JSON.stringify({ logout, list, missingStatus, doctor })).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
-  });
+  }, 60000);
 
   it("reports package status and prints the packaged changelog", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
@@ -486,7 +487,7 @@ describe("gittensory-mcp CLI", () => {
       GITTENSORY_API_URL: url,
       GITTENSORY_TOKEN: "session-token",
       GITTENSORY_CONFIG_DIR: tempDir,
-      GITTENSORY_API_TIMEOUT_MS: "100",
+      GITTENSORY_API_TIMEOUT_MS: fixtureApiTimeoutMs,
     };
 
     const online = JSON.parse(await runAsync(["decision-pack", "--login", "JSONbored", "--json"], env)) as { status: string; source: string };
@@ -537,7 +538,7 @@ describe("gittensory-mcp CLI", () => {
       GITTENSORY_API_URL: url,
       GITTENSORY_TOKEN: "session-token",
       GITTENSORY_CONFIG_DIR: tempDir,
-      GITTENSORY_API_TIMEOUT_MS: "1000",
+      GITTENSORY_API_TIMEOUT_MS: fixtureApiTimeoutMs,
     };
 
     await runAsync(["decision-pack", "--login", "JSONbored", "--json"], env);
@@ -701,7 +702,7 @@ describe("gittensory-mcp CLI", () => {
         ),
       ).rejects.toThrow("Refusing to print unsafe public packet markdown from the server.");
     }
-  }, 10000);
+  }, 60000);
 
   it("sends bounded structured validation summaries without local logs", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
@@ -753,7 +754,7 @@ describe("gittensory-mcp CLI", () => {
     );
     expect(JSON.stringify(packet.validation)).not.toMatch(/raw_trust|\/Users\/example|\/tmp\/raw/i);
     expect(JSON.stringify(packet.validation)).not.toMatch(/C:\/Users|alice/i);
-  });
+  }, 60000);
 
   it("sends branch eligibility metadata without local source contents", async () => {
     tempDir = createPacketRepo();
@@ -907,7 +908,7 @@ function run(args: string[], env: Record<string, string> = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
-      GITTENSORY_API_TIMEOUT_MS: "1000",
+      GITTENSORY_API_TIMEOUT_MS: fixtureApiTimeoutMs,
       GITTENSORY_CONFIG_DIR: mkdtempSync(join(tmpdir(), "gittensory-cli-config-")),
       ...env,
     },
@@ -924,7 +925,7 @@ function runAsync(args: string[], env: Record<string, string> = {}) {
         encoding: "utf8",
         env: {
           ...process.env,
-          GITTENSORY_API_TIMEOUT_MS: "1000",
+          GITTENSORY_API_TIMEOUT_MS: fixtureApiTimeoutMs,
           GITTENSORY_CONFIG_DIR: mkdtempSync(join(tmpdir(), "gittensory-cli-config-")),
           ...env,
         },

@@ -1,4 +1,8 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { auditMcpPackageFiles, checkMcpReleaseCandidate, sanitizeCommandOutput } from "../../scripts/check-mcp-release-candidate.mjs";
 import { isReleaseWatchIssue } from "../../scripts/check-mcp-release-due.mjs";
 import { buildMcpReleaseIssue, buildMcpReleaseReport, renderMcpChangelog, selectMcpReleaseCommits } from "../../scripts/mcp-release-core.mjs";
 
@@ -80,6 +84,7 @@ describe("MCP release changelog detection", () => {
     expect(issue.title).toBe("MCP release due: 0.4.0");
     expect(issue.body).toContain("<!-- gittensory:mcp-release-due -->");
     expect(issue.body).toContain("- [ ] Run `npm run test:release:mcp`");
+    expect(issue.body).toContain("- [ ] Run `npm run mcp:release-candidate -- --tag mcp-v0.4.0 --full-ci`");
     expect(issue.body).toContain("- [ ] Tag `mcp-v0.4.0`");
   });
 
@@ -117,3 +122,239 @@ describe("MCP release changelog detection", () => {
     ).toBe(false);
   });
 });
+
+describe("MCP release candidate dry run", () => {
+  it("accepts a matching package, CLI version, changelog, and tokenless publish workflow", () => {
+    const root = releaseCandidateFixture();
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.5.0" });
+
+      expect(report.ok).toBe(true);
+      expect(report.checks.map((check) => check.name)).toEqual([
+        "release_tag",
+        "package_version",
+        "cli_version",
+        "compatibility_metadata",
+        "changelog_section",
+        "trusted_publishing",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the MCP package version as the default intended tag", () => {
+    const root = releaseCandidateFixture();
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root });
+
+      expect(report.ok).toBe(true);
+      expect(report.tag).toBe("mcp-v0.5.0");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails malformed release tags before accepting a release candidate", () => {
+    const root = releaseCandidateFixture();
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "v0.5.0" });
+
+      expect(report.ok).toBe(false);
+      expect(report.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "release_tag", status: "fail" })]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the intended tag does not match the package version", () => {
+    const root = releaseCandidateFixture();
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.6.0" });
+
+      expect(report.ok).toBe(false);
+      expect(report.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "package_version", status: "fail" })]));
+      expect(report.checks.find((check) => check.name === "package_version")?.detail).toContain("does not match intended tag");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the CLI packageVersion is stale", () => {
+    const root = releaseCandidateFixture({ cli: 'const packageVersion = "0.4.0";\n' });
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.5.0" });
+
+      expect(report.ok).toBe(false);
+      expect(report.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "cli_version", status: "fail" })]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when compatibility metadata does not point at the package version", () => {
+    const root = releaseCandidateFixture({
+      compatibility: 'export const MINIMUM_SUPPORTED_MCP_VERSION = "0.4.0";\nexport const LATEST_RECOMMENDED_MCP_VERSION = "0.5.0";\n',
+    });
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.5.0" });
+
+      expect(report.ok).toBe(false);
+      expect(report.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "compatibility_metadata", status: "fail" })]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the target changelog section is missing", () => {
+    const root = releaseCandidateFixture({
+      changelog: `# Changelog
+
+## mcp-v0.4.0 - 2026-06-02
+
+### Fixes
+- Previous release
+`,
+    });
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.5.0" });
+
+      expect(report.ok).toBe(false);
+      expect(report.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "changelog_section", status: "fail" })]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the target changelog section has no release entries", () => {
+    const root = releaseCandidateFixture({
+      changelog: `# Changelog
+
+## mcp-v0.5.0 - 2026-06-04
+
+### Chores
+`,
+    });
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.5.0" });
+
+      expect(report.ok).toBe(false);
+      expect(report.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "changelog_section", status: "fail" })]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails package audit when the tarball contains an unexpected file", () => {
+    const checks = auditMcpPackageFiles(["package/package.json", "package/bin/gittensory-mcp.js", "package/private-secret.txt"], () => "placeholder");
+
+    expect(checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "package_file:private-secret.txt", status: "fail" })]));
+  });
+
+  it("fails package audit when an allowed file contains secret-like content", () => {
+    const checks = auditMcpPackageFiles(["package/package.json"], () => "API_TOKEN=not-for-public-output");
+
+    expect(checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "package_file:package.json", status: "fail" })]));
+  });
+
+  it("fails trusted publishing validation when npm tokens are configured", () => {
+    const root = releaseCandidateFixture({
+      workflow: `name: Publish MCP Package
+jobs:
+  publish:
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Publish with npm trusted publishing
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace @jsonbored/gittensory-mcp --provenance
+`,
+    });
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.5.0" });
+
+      expect(report.ok).toBe(false);
+      expect(report.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "trusted_publishing", status: "fail" })]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps public release-candidate output away from sensitive scoring language", () => {
+    const root = releaseCandidateFixture();
+    try {
+      const report = checkMcpReleaseCandidate({ rootDir: root, tag: "mcp-v0.5.0" });
+      const publicOutput = report.checks.map((check) => `${check.name}: ${check.detail}`).join("\n");
+
+      expect(publicOutput).not.toMatch(/wallet|hotkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts local paths and token-shaped values from command output", () => {
+    const sanitized = sanitizeCommandOutput("/tmp/rc/private ghp_exampletoken API_TOKEN=secret", ["/tmp/rc"]);
+
+    expect(sanitized).toContain("<local-path>");
+    expect(sanitized).not.toContain("/tmp/rc");
+    expect(sanitized).not.toContain("ghp_exampletoken");
+    expect(sanitized).not.toContain("API_TOKEN=secret");
+  });
+
+  it("keeps the release-candidate workflow dry-run only", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/mcp-release-candidate.yml"), "utf8");
+
+    expect(workflow).toContain("workflow_dispatch");
+    expect(workflow).toContain("npm run mcp:release-candidate");
+    expect(workflow).not.toMatch(/\bnpm\s+publish\b/);
+    expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN|secrets\./);
+  });
+});
+
+function releaseCandidateFixture(overrides: { changelog?: string; cli?: string; compatibility?: string; workflow?: string } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "gittensory-release-candidate-"));
+  writeFixture(root, "packages/gittensory-mcp/package.json", JSON.stringify({ name: "@jsonbored/gittensory-mcp", version: "0.5.0" }, null, 2));
+  writeFixture(root, "packages/gittensory-mcp/bin/gittensory-mcp.js", overrides.cli ?? 'const packageVersion = "0.5.0";\n');
+  writeFixture(
+    root,
+    "src/services/mcp-compatibility.ts",
+    overrides.compatibility ??
+      'export const MINIMUM_SUPPORTED_MCP_VERSION = "0.5.0";\nexport const LATEST_RECOMMENDED_MCP_VERSION = "0.5.0";\n',
+  );
+  writeFixture(
+    root,
+    "packages/gittensory-mcp/CHANGELOG.md",
+    overrides.changelog ??
+      `# Changelog
+
+## mcp-v0.5.0 - 2026-06-04
+
+### Chores
+- Prepare MCP release metadata
+`,
+  );
+  writeFixture(
+    root,
+    ".github/workflows/npm-publish.yml",
+    overrides.workflow ??
+      `name: Publish MCP Package
+jobs:
+  publish:
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Publish with npm trusted publishing
+        run: npm publish --workspace @jsonbored/gittensory-mcp --access public --provenance
+`,
+  );
+  return root;
+}
+
+function writeFixture(root: string, path: string, contents: string) {
+  const target = join(root, path);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, contents);
+}
