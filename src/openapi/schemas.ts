@@ -597,7 +597,7 @@ export const RepositorySettingsSchema = z
     slopGateMode: z.enum(["off", "advisory", "block"]),
     mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
     reviewerRoutingMode: z
-      .enum(["off", "advisory"])
+      .enum(["off", "advisory", "auto_request"])
       .optional()
       .openapi({
         description: "CODEOWNERS reviewer routing mode. Defaults to off for existing repositories and omitted client payloads.",
@@ -651,7 +651,7 @@ export const RepoSettingsPreviewSchema = z
       slopGateMode: z.enum(["off", "advisory", "block"]),
       mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
       reviewerRoutingMode: z
-        .enum(["off", "advisory"])
+        .enum(["off", "advisory", "auto_request"])
         .optional()
         .openapi({
           description: "CODEOWNERS reviewer routing mode. Defaults to off for existing repositories and omitted client payloads.",

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { parseCodeowners } from "../../src/github/codeowners";
 import {
   buildReviewerRouting,
+  isFirstTimeExternalContributor,
   REVIEWER_BUSY_OPEN_PR_THRESHOLD,
+  selectAutoRequestReviewerLogins,
 } from "../../src/signals/reviewer-routing";
 import type { BurdenForecast } from "../../src/signals/engine";
 import type { PullRequestRecord } from "../../src/types";
@@ -128,5 +130,75 @@ describe("buildReviewerRouting", () => {
       openPullRequests: [],
     });
     expect(teamOnly.summary).toMatch(/matched 2 codeowners teams/i);
+  });
+});
+
+describe("selectAutoRequestReviewerLogins", () => {
+  const reviewerRouting = {
+    suggestions: [
+      { login: "alice", matchedFileCount: 2, loadBand: "light" as const, reason: "Owns 2 changed files." },
+      { login: "Bob", matchedFileCount: 1, loadBand: "busy" as const, reason: "Owns 1 changed file." },
+    ],
+    teams: ["org/platform-team"],
+    repoLoadLevel: null,
+    summary: "Suggested 2 reviewers from CODEOWNERS for the changed files.",
+  };
+
+  it("only returns reviewers under auto_request mode", () => {
+    expect(selectAutoRequestReviewerLogins({ mode: "off", reviewerRouting, mergedPrCount: 1 })).toEqual([]);
+    expect(selectAutoRequestReviewerLogins({ mode: "advisory", reviewerRouting, mergedPrCount: 1 })).toEqual([]);
+    expect(selectAutoRequestReviewerLogins({ mode: "auto_request", reviewerRouting, mergedPrCount: 1 })).toEqual(["alice", "Bob"]);
+  });
+
+  it("never auto-requests for first-time external contributors", () => {
+    expect(isFirstTimeExternalContributor("NONE", 0)).toBe(true);
+    expect(isFirstTimeExternalContributor(" first_timer ", 0)).toBe(true);
+    expect(isFirstTimeExternalContributor("FIRST_TIME_CONTRIBUTOR", 0)).toBe(true);
+    expect(isFirstTimeExternalContributor("MEMBER", 0)).toBe(false);
+    expect(isFirstTimeExternalContributor(null, 0)).toBe(false);
+    expect(selectAutoRequestReviewerLogins({ mode: "auto_request", reviewerRouting, authorAssociation: "NONE", mergedPrCount: 0 })).toEqual([]);
+  });
+
+  it("filters already-requested reviewers case-insensitively and preserves order", () => {
+    expect(
+      selectAutoRequestReviewerLogins({
+        mode: "auto_request",
+        reviewerRouting,
+        authorAssociation: "CONTRIBUTOR",
+        mergedPrCount: 2,
+        alreadyRequestedUsers: ["ALICE", "@bob"],
+      }),
+    ).toEqual([]);
+    expect(
+      selectAutoRequestReviewerLogins({
+        mode: "auto_request",
+        reviewerRouting,
+        authorAssociation: "CONTRIBUTOR",
+        mergedPrCount: 2,
+        alreadyRequestedUsers: ["alice"],
+      }),
+    ).toEqual(["Bob"]);
+  });
+
+  it("ignores missing routing input and de-duplicates repeated suggestions", () => {
+    expect(selectAutoRequestReviewerLogins({ mode: "auto_request", mergedPrCount: 1 })).toEqual([]);
+    expect(selectAutoRequestReviewerLogins({ mode: "auto_request", mergedPrCount: 1, reviewerRouting: null, alreadyRequestedUsers: null })).toEqual([]);
+    expect(isFirstTimeExternalContributor("", 0)).toBe(false);
+    expect(
+      selectAutoRequestReviewerLogins({
+        mode: "auto_request",
+        mergedPrCount: 1,
+        reviewerRouting: {
+          suggestions: [
+            { login: "alice", matchedFileCount: 2, loadBand: "light", reason: "Owns 2 changed files." },
+            { login: " alice ", matchedFileCount: 1, loadBand: "busy", reason: "Owns 1 changed file." },
+            { login: "   ", matchedFileCount: 1, loadBand: "busy", reason: "Owns 1 changed file." },
+          ],
+          teams: [],
+          repoLoadLevel: null,
+          summary: "Suggested 2 reviewers from CODEOWNERS for the changed files.",
+        },
+      }),
+    ).toEqual(["alice"]);
   });
 });
