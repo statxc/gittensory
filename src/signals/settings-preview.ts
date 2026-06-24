@@ -363,6 +363,11 @@ function buildWarnings(settings: RepositorySettings, decision: PublicSurfaceDeci
   if (settings.gateCheckMode === "enabled" && missing.has("checks")) {
     warnings.push("Gate checks are enabled but GitHub App permission Checks: write is missing. Set repository permission checks to write, then approve the change.");
   }
+  if (settings.reviewerRoutingMode === "auto_request" && missing.has("pull_requests")) {
+    warnings.push(
+      "Reviewer auto-request is enabled but GitHub App permission Pull requests: write is missing. Set repository permission pull_requests to write, then approve the change.",
+    );
+  }
   for (const event of installation.missingEvents) {
     warnings.push(`The GitHub App is not subscribed to the ${event} webhook event; subscribe to it so Gittensory receives the relevant deliveries.`);
   }
@@ -515,6 +520,7 @@ function requiredInstallPermissions(settings: RepositorySettings, decision: Publ
       .filter(([, value]) => value === "read")
       .map(([key, value]) => [key, value] as const),
   );
+  if (settings.reviewerRoutingMode === "auto_request") permissions.set("pull_requests", "write");
   if (writesPrPublicSurface(settings, decision)) permissions.set("issues", "write");
   if (decision.willCheckRun || settings.checkRunMode === "enabled" || settings.gateCheckMode === "enabled") permissions.set("checks", "write");
   return [...permissions.entries()].map(([key, value]) => `${key}: ${value}`);

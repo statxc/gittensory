@@ -4105,7 +4105,7 @@ function reviewDetailsBody(aiReview: { notes: string } | undefined): string[] {
 function reviewerRoutingBody(reviewerRouting: ReviewerRouting | undefined): string[] {
   if (!reviewerRouting || (reviewerRouting.suggestions.length === 0 && reviewerRouting.teams.length === 0)) return [];
   return [
-    `_${sanitizePanelText(reviewerRouting.summary)} From CODEOWNERS._`,
+    `_${sanitizePanelText(reviewerRouting.summary)} From CODEOWNERS. When auto-request is enabled, gittensory may request top-ranked individual reviewers automatically._`,
     ...(reviewerRouting.suggestions.length > 0
       ? [
           "",

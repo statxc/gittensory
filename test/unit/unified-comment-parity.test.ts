@@ -175,7 +175,7 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     expect(legacy).toContain("alice");
     expect(legacy).toContain("org/platform-team");
     expect(collapsibles.map((section) => section.title)).toContain("Suggested reviewers");
-    expect(collapsibles.find((section) => section.title === "Suggested reviewers")?.body).toContain("From CODEOWNERS.");
+    expect(collapsibles.find((section) => section.title === "Suggested reviewers")?.body).toContain("auto-request");
   });
 
   it("renders suggestions-only reviewer routing without a teams line", () => {

@@ -88,7 +88,9 @@ import {
   createOrUpdatePendingGateCheckRun,
   createOrUpdateSkippedGateCheckRun,
   getInstallationId,
+  getPullRequestRequestedReviewers,
   getRepositoryCollaboratorPermission,
+  requestPullRequestReviewers,
 } from "../github/app";
 import { loadRepoCodeowners } from "../github/codeowners";
 import { AGENT_COMMAND_COMMENT_MARKER, createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
@@ -180,7 +182,7 @@ import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, type CaptureRoute } from "../review/visual/capture";
 import type { CheckFailureDetail, MergeReadiness } from "../review/unified-comment";
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
-import { buildReviewerRouting, type ReviewerRouting } from "../signals/reviewer-routing";
+import { buildReviewerRouting, selectAutoRequestReviewerLogins, type ReviewerRouting } from "../signals/reviewer-routing";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
 import { buildFocusManifestGuidance } from "../signals/focus-manifest";
@@ -204,6 +206,7 @@ import { isCloseHoldOnly, isHoldOnly, recordPrOutcome, recordReversalSignals, ru
 import { recordNativeGateDecision } from "../review/parity-wire";
 import type { SubmissionOutcome } from "../review/submitter-reputation";
 import type { AdvisoryFinding, ContributorEvidenceRecord, ContributorRepoStatRecord, DetectedNotificationEvent, GitHubWebhookPayload, IssueRecord, JobMessage, JsonValue, PullRequestFilePathRecord, PullRequestRecord, RepositoryRecord, RepositorySettings } from "../types";
+import type { AgentActionMode } from "../settings/agent-execution";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
 
@@ -1874,6 +1877,52 @@ async function loadGateAuthorHistory(env: Env, repoFullName: string, author: str
   }
 }
 
+async function maybeAutoRequestReviewers(
+  env: Env,
+  args: {
+    installationId: number;
+    repoFullName: string;
+    pullNumber: number;
+    mode: AgentActionMode;
+    settings: RepositorySettings;
+    reviewerRouting?: ReviewerRouting | undefined;
+    author: string | null;
+    authorAssociation?: string | null | undefined;
+    authorHistory: { mergedPrCount: number; closedUnmergedPrCount: number };
+    deliveryId: string;
+  },
+): Promise<void> {
+  if (args.mode !== "live" || args.settings.reviewerRoutingMode !== "auto_request" || !args.reviewerRouting || args.reviewerRouting.suggestions.length === 0) return;
+  try {
+    const requested = await getPullRequestRequestedReviewers(env, args.installationId, args.repoFullName, args.pullNumber);
+    const reviewers = selectAutoRequestReviewerLogins({
+      mode: args.settings.reviewerRoutingMode,
+      reviewerRouting: args.reviewerRouting,
+      authorAssociation: args.authorAssociation,
+      mergedPrCount: args.authorHistory.mergedPrCount,
+      alreadyRequestedUsers: requested.users,
+    });
+    if (reviewers.length === 0) return;
+    await requestPullRequestReviewers(env, args.installationId, args.repoFullName, args.pullNumber, reviewers, args.mode);
+    await recordAuditEvent(env, {
+      eventType: "github_app.reviewer_auto_request",
+      actor: args.author,
+      targetKey: `${args.repoFullName}#${args.pullNumber}`,
+      outcome: "completed",
+      metadata: { deliveryId: args.deliveryId, repoFullName: args.repoFullName, reviewers },
+    }).catch(() => undefined);
+  } catch (error) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.reviewer_auto_request_failed",
+      actor: args.author,
+      targetKey: `${args.repoFullName}#${args.pullNumber}`,
+      outcome: "error",
+      detail: errorMessage(error),
+      metadata: { deliveryId: args.deliveryId, repoFullName: args.repoFullName },
+    }).catch(() => undefined);
+  }
+}
+
 /**
  * Resolve the PR's changed files for the review path, preferring the stored rows and, when they are empty at
  * review time, fetching them inline from GitHub (and persisting them). This fixes diff-less first reviews:
@@ -2495,6 +2544,18 @@ async function maybePublishPrPublicSurface(
     // (excluding this PR) with an aggregate DB query. Do not derive policy-enforcement history from
     // the bounded repoPullRequests sample; missing or case-mismatched history could soften a block.
     const authorHistory = await loadGateAuthorHistory(env, repoFullName, author, pr.number);
+    await maybeAutoRequestReviewers(env, {
+      installationId,
+      repoFullName,
+      pullNumber: pr.number,
+      mode,
+      settings,
+      reviewerRouting,
+      author,
+      authorAssociation: pr.authorAssociation,
+      authorHistory,
+      deliveryId: webhook.deliveryId,
+    });
 
     const gatePolicy = gateCheckPolicy(settings, readiness.total, confirmedContributor, slopRisk, authorHistory);
     gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gatePolicy) : undefined;

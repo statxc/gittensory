@@ -6102,7 +6102,7 @@ describe("api routes", () => {
           commentMode: "detected_contributors_only",
           publicSignalLevel: "minimal",
           gatePack: "oss-anti-slop",
-          reviewerRoutingMode: "advisory",
+          reviewerRoutingMode: "auto_request",
           commandAuthorization: { default: ["maintainer"], commands: { preflight: ["pr_author"], "queue-summary": ["maintainer", "collaborator"] } },
         }),
       },
@@ -6113,7 +6113,7 @@ describe("api routes", () => {
       commentMode: "detected_contributors_only",
       publicSignalLevel: "minimal",
       gatePack: "oss-anti-slop",
-      reviewerRoutingMode: "advisory",
+      reviewerRoutingMode: "auto_request",
       commandAuthorization: { default: ["maintainer"], commands: expect.objectContaining({ preflight: ["pr_author"] }) },
     });
 
@@ -6122,7 +6122,7 @@ describe("api routes", () => {
     await expect(settings.json()).resolves.toMatchObject({
       commentMode: "detected_contributors_only",
       gatePack: "oss-anti-slop",
-      reviewerRoutingMode: "advisory",
+      reviewerRoutingMode: "auto_request",
       commandAuthorization: { commands: expect.objectContaining({ preflight: ["pr_author"] }) },
     });
 

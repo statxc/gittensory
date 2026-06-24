@@ -29,6 +29,16 @@ export type ReviewerRoutingInput = {
   burdenForecast?: BurdenForecast | null | undefined;
 };
 
+export type ReviewerAutoRequestSelectionInput = {
+  mode: "off" | "advisory" | "auto_request";
+  reviewerRouting?: ReviewerRouting | null | undefined;
+  authorAssociation?: string | null | undefined;
+  mergedPrCount: number;
+  alreadyRequestedUsers?: string[] | null | undefined;
+};
+
+const FIRST_TIME_EXTERNAL_ASSOCIATIONS = new Set(["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"]);
+
 function stripLeadingAt(owner: string): string {
   return owner.startsWith("@") ? owner.slice(1) : owner;
 }
@@ -40,6 +50,28 @@ function isTeamOwner(owner: string): boolean {
 
 function isUserOwner(owner: string): boolean {
   return owner.startsWith("@") && !stripLeadingAt(owner).includes("/");
+}
+
+export function isFirstTimeExternalContributor(authorAssociation: string | null | undefined, mergedPrCount: number): boolean {
+  if (mergedPrCount !== 0) return false;
+  return FIRST_TIME_EXTERNAL_ASSOCIATIONS.has((authorAssociation ?? "").trim().toUpperCase());
+}
+
+export function selectAutoRequestReviewerLogins(input: ReviewerAutoRequestSelectionInput): string[] {
+  if (input.mode !== "auto_request" || !input.reviewerRouting) return [];
+  if (isFirstTimeExternalContributor(input.authorAssociation, input.mergedPrCount)) return [];
+  const requestedUsers = new Set((input.alreadyRequestedUsers ?? []).map((login) => stripLeadingAt(login).toLowerCase()));
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const suggestion of input.reviewerRouting.suggestions) {
+    const login = suggestion.login.trim();
+    if (!login) continue;
+    const key = stripLeadingAt(login).toLowerCase();
+    if (requestedUsers.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    selected.push(login);
+  }
+  return selected;
 }
 
 export function buildReviewerRouting(input: ReviewerRoutingInput): ReviewerRouting {

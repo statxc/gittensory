@@ -5283,7 +5283,7 @@ function parseGateRuleMode(value: string): RepositorySettings["linkedIssueGateMo
 }
 
 function parseReviewerRoutingMode(value: string): RepositorySettings["reviewerRoutingMode"] {
-  if (value === "advisory") return value;
+  if (value === "advisory" || value === "auto_request") return value;
   return "off";
 }
 
