@@ -8152,6 +8152,15 @@
               "advisory",
               "block"
             ]
+          },
+          "reviewerRoutingMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "advisory"
+            ],
+            "default": "off",
+            "description": "CODEOWNERS reviewer routing mode. Defaults to off for existing repositories and omitted client payloads."
           }
         },
         "required": [
@@ -8777,6 +8786,15 @@
                   "advisory",
                   "block"
                 ]
+              },
+              "reviewerRoutingMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "advisory"
+                ],
+                "default": "off",
+                "description": "CODEOWNERS reviewer routing mode. Defaults to off for existing repositories and omitted client payloads."
               }
             },
             "required": [

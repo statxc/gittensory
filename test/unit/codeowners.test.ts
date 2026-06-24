@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { matchCodeowners, parseCodeowners, type CodeownersRule } from "../../src/github/codeowners";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadRepoCodeowners, matchCodeowners, parseCodeowners, type CodeownersRule } from "../../src/github/codeowners";
+import { createTestEnv } from "../helpers/d1";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("parseCodeowners", () => {
   it("skips blank lines and comments while preserving rule order", () => {
@@ -103,3 +108,107 @@ describe("matchCodeowners", () => {
     expect(matchCodeowners(parseCodeowners("*a*a*a*a* @owner"), "src/bbbb")).toEqual([]);
   });
 });
+
+describe("loadRepoCodeowners", () => {
+  it("returns [] for invalid repo names", async () => {
+    await expect(loadRepoCodeowners({} as Env, "invalid")).resolves.toEqual([]);
+    await expect(loadRepoCodeowners({} as Env, "/repo")).resolves.toEqual([]);
+    await expect(loadRepoCodeowners({} as Env, "owner/")).resolves.toEqual([]);
+  });
+
+  it("falls back across candidate files and ignores blank responses", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      calls.push(url);
+      if (url.endsWith("/.github/CODEOWNERS")) return new Response(" ", { status: 200 });
+      if (url.endsWith("/docs/CODEOWNERS")) return new Response("/src/ @docs-owner\n", { status: 200 });
+      if (url.endsWith("/CODEOWNERS")) return new Response("not found", { status: 404 });
+      return new Response("nope", { status: 404 });
+    });
+
+    await expect(loadRepoCodeowners({} as Env, "acme/widgets")).resolves.toEqual([{ pattern: "/src/", owners: ["@docs-owner"] }]);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("loads CODEOWNERS from the requested ref instead of HEAD", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      calls.push(url);
+      if (url.endsWith("/release%2F1.2/.github/CODEOWNERS")) return new Response("/src/ @release-owner\n", { status: 200 });
+      return new Response("missing", { status: 404 });
+    });
+
+    await expect(loadRepoCodeowners({} as Env, "acme/widgets", { ref: "release/1.2" })).resolves.toEqual([{ pattern: "/src/", owners: ["@release-owner"] }]);
+    expect(calls[0]).toContain("/release%2F1.2/.github/CODEOWNERS");
+  });
+
+  it("falls back to the authenticated contents API for private repos", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      calls.push(url);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/main/.github/CODEOWNERS")) return new Response("missing", { status: 404 });
+      if (url.includes("/contents/.github/CODEOWNERS?ref=main")) return new Response("/src/ @private-owner\n", { status: 200 });
+      return new Response("missing", { status: 404 });
+    });
+
+    await expect(loadRepoCodeowners(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), "acme/widgets", { installationId: 99, ref: "main" })).resolves.toEqual([
+      { pattern: "/src/", owners: ["@private-owner"] },
+    ]);
+    expect(calls.some((url) => url.includes("/contents/.github/CODEOWNERS?ref=main"))).toBe(true);
+  });
+
+  it("continues across authenticated empty and non-ok candidate responses", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      calls.push(url);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/contents/.github/CODEOWNERS?ref=main")) return new Response("missing", { status: 404 });
+      if (url.includes("/contents/CODEOWNERS?ref=main")) return new Response(" ", { status: 200 });
+      if (url.includes("/contents/docs/CODEOWNERS?ref=main")) return new Response("/docs/ @docs-owner\n", { status: 200 });
+      return new Response("missing", { status: 404 });
+    });
+
+    await expect(loadRepoCodeowners(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), "acme/widgets", { installationId: 100, ref: "main" })).resolves.toEqual([
+      { pattern: "/docs/", owners: ["@docs-owner"] },
+    ]);
+    expect(calls.some((url) => url.includes("/contents/.github/CODEOWNERS?ref=main"))).toBe(true);
+    expect(calls.some((url) => url.includes("/contents/CODEOWNERS?ref=main"))).toBe(true);
+    expect(calls.some((url) => url.includes("/contents/docs/CODEOWNERS?ref=main"))).toBe(true);
+  });
+
+  it("returns [] when every candidate fails or throws", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/.github/CODEOWNERS")) throw new Error("network");
+      if (url.endsWith("/CODEOWNERS")) return new Response("", { status: 200 });
+      return new Response("missing", { status: 404 });
+    });
+
+    await expect(loadRepoCodeowners({} as Env, "acme/widgets")).resolves.toEqual([]);
+  });
+});
+
+async function generatePrivateKeyPem(): Promise<string> {
+  const key = (await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const exported = await crypto.subtle.exportKey("pkcs8", key.privateKey);
+  const base64 = Buffer.from(exported as ArrayBuffer).toString("base64").replace(/(.{64})/g, "$1\n");
+  const pemLabel = "PRIVATE KEY";
+  const boundary = (kind: "BEGIN" | "END") => ["-----", kind, " ", pemLabel, "-----"].join("");
+  return [boundary("BEGIN"), base64, boundary("END")].join("\n");
+}

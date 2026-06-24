@@ -189,6 +189,7 @@ export type RepoSettingsPreview = {
     qualityGateMinScore?: number | null | undefined;
     slopGateMode: RepositorySettings["slopGateMode"];
     mergeReadinessGateMode: RepositorySettings["mergeReadinessGateMode"];
+    reviewerRoutingMode: RepositorySettings["reviewerRoutingMode"];
     manifestPolicyGateMode: RepositorySettings["manifestPolicyGateMode"];
     selfAuthoredLinkedIssueGateMode: RepositorySettings["selfAuthoredLinkedIssueGateMode"];
     firstTimeContributorGrace: boolean;
@@ -312,6 +313,7 @@ export function buildRepoSettingsPreview(args: {
       qualityGateMinScore: settings.qualityGateMinScore ?? null,
       slopGateMode: settings.slopGateMode,
       mergeReadinessGateMode: settings.mergeReadinessGateMode,
+      reviewerRoutingMode: settings.reviewerRoutingMode,
       manifestPolicyGateMode: settings.manifestPolicyGateMode,
       selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode,
       firstTimeContributorGrace: settings.firstTimeContributorGrace,
@@ -508,14 +510,14 @@ function writesPrPublicSurface(settings: RepositorySettings, decision: PublicSur
 function requiredInstallPermissions(settings: RepositorySettings, decision: PublicSurfaceDecision): string[] {
   // Read-only base permissions are derived from the canonical constant so this surface stays in sync.
   // Write permissions are gated on whether the current settings actually produce that output.
-  const permissions = new Set(
+  const permissions = new Map(
     Object.entries(REQUIRED_INSTALLATION_PERMISSIONS)
       .filter(([, value]) => value === "read")
-      .map(([key, value]) => `${key}: ${value}`),
+      .map(([key, value]) => [key, value] as const),
   );
-  if (writesPrPublicSurface(settings, decision)) permissions.add("issues: write");
-  if (decision.willCheckRun || settings.checkRunMode === "enabled" || settings.gateCheckMode === "enabled") permissions.add("checks: write");
-  return [...permissions];
+  if (writesPrPublicSurface(settings, decision)) permissions.set("issues", "write");
+  if (decision.willCheckRun || settings.checkRunMode === "enabled" || settings.gateCheckMode === "enabled") permissions.set("checks", "write");
+  return [...permissions.entries()].map(([key, value]) => `${key}: ${value}`);
 }
 
 function activeMissingPermissions(settings: RepositorySettings, decision: PublicSurfaceDecision, installation: InstallationHealthSummary | null): string[] {
