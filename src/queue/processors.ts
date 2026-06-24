@@ -79,7 +79,18 @@ import {
   refreshPullRequestDetails,
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot, type OfficialGittensorMinerDetection } from "../gittensor/api";
-import { createInstallationToken, createOrUpdateCheckRun, createOrUpdateErroredGateCheckRun, createOrUpdateGateCheckRun, createOrUpdateOverriddenGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
+import {
+  createInstallationToken,
+  createOrUpdateCheckRun,
+  createOrUpdateErroredGateCheckRun,
+  createOrUpdateGateCheckRun,
+  createOrUpdateOverriddenGateCheckRun,
+  createOrUpdatePendingGateCheckRun,
+  createOrUpdateSkippedGateCheckRun,
+  getInstallationId,
+  getRepositoryCollaboratorPermission,
+} from "../github/app";
+import { loadRepoCodeowners } from "../github/codeowners";
 import { AGENT_COMMAND_COMMENT_MARKER, createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
 import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
 import {
@@ -159,6 +170,7 @@ import {
   PR_PANEL_RETRIGGER_MARKER,
   unionScopedOverlapClusters,
   type ContributorProfile,
+  type PublicPrIntelligenceCommentArgs,
 } from "../signals/engine";
 import { isDuplicateClusterWinner } from "../signals/duplicate-winner";
 import { buildUnifiedReviewDiff } from "../review/review-diff";
@@ -168,6 +180,7 @@ import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, type CaptureRoute } from "../review/visual/capture";
 import type { CheckFailureDetail, MergeReadiness } from "../review/unified-comment";
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
+import { buildReviewerRouting, type ReviewerRouting } from "../signals/reviewer-routing";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
 import { buildFocusManifestGuidance } from "../signals/focus-manifest";
@@ -2311,6 +2324,7 @@ async function maybePublishPrPublicSurface(
   let preflight!: ReturnType<typeof buildPreflightResult>;
   let gateEvaluation: ReturnType<typeof evaluateGateCheck> | undefined;
   let aiReview: { notes: string; reviewerCount: number } | undefined;
+  let reviewerRouting: ReviewerRouting | undefined;
   let gateFinalized = false;
   // The PR's changed files are needed by the slop/manifest gates, the AI review + grounding + RAG, the secret
   // scan, the check-run, and the unified comment. Resolve them AT MOST ONCE per review and share across the
@@ -2382,7 +2396,7 @@ async function maybePublishPrPublicSurface(
     // Slop (#530) and focus-manifest-policy (#555) gates both need the PR's changed files; load via the shared
     // resolver (lazy — a repo with both off pays nothing; see getReviewFiles above).
     let gateFiles: Awaited<ReturnType<typeof listPullRequestFiles>> | null = null;
-    if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off") {
+    if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off" || settings.reviewerRoutingMode !== "off") {
       gateFiles = await getReviewFiles();
     }
     if (shouldCollectSlopEvidence(settings)) {
@@ -2434,6 +2448,18 @@ async function maybePublishPrPublicSurface(
           ...(finding.action !== undefined ? { action: finding.action } : {}),
         });
       }
+    }
+
+    if (settings.reviewerRoutingMode !== "off") {
+      const routingFiles = gateFiles!;
+      const rules = await loadRepoCodeowners(env, repoFullName, { installationId, ref: pr.baseRef ?? undefined }).catch(() => []);
+      reviewerRouting = buildReviewerRouting({
+        rules,
+        changedPaths: routingFiles.map((file) => file.path),
+        openPullRequests: repoPullRequests.filter((candidate) => candidate.state === "open"),
+        authorLogin: author,
+        burdenForecast: null,
+      });
     }
 
     // AI maintainer review (opt-in via aiReviewMode). Mutates `advisory` with a consensus defect (if any)
@@ -2623,7 +2649,21 @@ async function maybePublishPrPublicSurface(
     // winner's hard-duplicate block is suppressed (they recompute the winner from their own open-only sibling
     // list). Flag-OFF (default) ⇒ false ⇒ the panels are byte-identical to today.
     const duplicateWinnerEnabled = env.GITTENSORY_DUPLICATE_WINNER === "true";
-    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation, review: reviewConfig, aiReview, duplicateWinnerEnabled };
+    const commentArgs: PublicPrIntelligenceCommentArgs = {
+      repo,
+      pr,
+      profile,
+      detection,
+      queueHealth,
+      collisions,
+      preflight,
+      settings,
+      gate: gateEvaluation,
+      review: reviewConfig,
+      aiReview,
+      duplicateWinnerEnabled,
+      reviewerRouting,
+    };
     let deterministicBody: string;
     // Convergence (Stage D): when the unified-review-comment flag is ON, render the single converged comment
     // (gittensory shape + reviewbot's review folded in). The gate stays authoritative (passed as `decision`),
@@ -2730,6 +2770,7 @@ async function maybePublishPrPublicSurface(
           queueHealth,
           ...(reviewConfig !== undefined ? { review: reviewConfig } : {}),
           ...(aiReview !== undefined ? { aiReview } : {}),
+          ...(reviewerRouting !== undefined ? { reviewerRouting } : {}),
         }),
         footerMarkdown: gittensoryFooter({
           earnUrl: repo?.isRegistered ? gittensorRepoEarnUrl(repoFullName) : undefined,

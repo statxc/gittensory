@@ -1,4 +1,9 @@
+import { createInstallationToken } from "./app";
+import { readBoundedResponseText } from "../signals/focus-manifest-loader";
+
 export type CodeownersRule = { pattern: string; owners: string[] };
+
+export const CODEOWNERS_FILE_CANDIDATES = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"] as const;
 const MAX_CODEOWNERS_PATTERN_LENGTH = 512;
 
 export function parseCodeowners(content: string): CodeownersRule[] {
@@ -105,7 +110,6 @@ function globMatchSegment(segment: string, pattern: string): boolean {
   };
   return visit(0, 0);
 }
-
 function splitCodeownersTokens(line: string): string[] {
   const tokens: string[] = [];
   let current = "";
@@ -130,4 +134,53 @@ function splitCodeownersTokens(line: string): string[] {
   }
   tokens.push(current);
   return tokens.filter(Boolean);
+}
+
+export async function loadRepoCodeowners(
+  env: Env,
+  repoFullName: string,
+  options: { installationId?: number | null | undefined; ref?: string | null | undefined } = {},
+): Promise<CodeownersRule[]> {
+  const slash = repoFullName.indexOf("/");
+  if (slash <= 0 || slash === repoFullName.length - 1) return [];
+  const owner = repoFullName.slice(0, slash);
+  const name = repoFullName.slice(slash + 1);
+  const ref = options.ref?.trim() || "HEAD";
+  for (const path of CODEOWNERS_FILE_CANDIDATES) {
+    try {
+      const rawResponse = await fetch(`https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${encodeURIComponent(ref)}/${path}`, {
+        headers: { Accept: "text/plain", "User-Agent": "gittensory" },
+      });
+      if (rawResponse.ok) {
+        const rawText = await readBoundedResponseText(rawResponse);
+        if (rawText !== null && rawText.trim() !== "") return parseCodeowners(rawText);
+      }
+    } catch {
+      // Fall through to the authenticated contents API path when available.
+    }
+    if (!options.installationId) continue;
+    try {
+      const token = await createInstallationToken(env, options.installationId);
+      const response = await fetch(
+        `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${path
+          .split("/")
+          .map(encodeURIComponent)
+          .join("/")}?ref=${encodeURIComponent(ref)}`,
+        {
+          headers: {
+            Accept: "application/vnd.github.raw+json",
+            Authorization: `Bearer ${token}`,
+            "User-Agent": "gittensory",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        },
+      );
+      if (!response.ok) continue;
+      const text = await readBoundedResponseText(response);
+      if (text !== null && text.trim() !== "") return parseCodeowners(text);
+    } catch {
+      // Try the next candidate path.
+    }
+  }
+  return [];
 }
